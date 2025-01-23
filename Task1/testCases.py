@@ -1,114 +1,94 @@
+import unittest
 import numpy as np
 import cv2
-import os
-from typing import List, Tuple
-import random
+from task1 import TargetSimulation
 
 
-class TestImageGenerator:
-    def __init__(self,
-                 image_size: Tuple[int, int] = (800, 600),
-                 num_balls: int = 5,
-                 ball_radius: int = 20,
-                 min_distance: int = 60):
-        """
-        Initialize the test image generator.
-
-        Args:
-            image_size: Tuple of (width, height) for the output image
-            num_balls: Number of balls to place in the image
-            ball_radius: Radius of each ball in pixels
-            min_distance: Minimum distance between ball centers
-        """
-        self.width, self.height = image_size
-        self.num_balls = num_balls
-        self.ball_radius = ball_radius
-        self.min_distance = min_distance
-        self.colors = [
-            (0, 165, 255),  # Orange (basketball)
-            (255, 255, 255),  # White (volleyball)
-            (255, 232, 115),  # Light blue (beach ball)
-            (255, 191, 0),  # Deep blue (beach ball)
-            (147, 20, 255),  # Pink (beach ball)
-            (0, 255, 255)  # Yellow (beach ball)
+class TestTargetSimulation(unittest.TestCase):
+    def setUp(self):
+        """Initialize test cases with known properties"""
+        self.test_cases = [
+            {
+                "path": "images/test1.png",
+                "expected_targets": 3,
+                "colors": ["cyan", "orange", "white"],
+                "description": "Basic three-target configuration"
+            },
+            {
+                "path": "images/test2.png",
+                "expected_targets": 5,
+                "colors": ["cyan", "cyan", "orange", "white", "pink"],
+                "description": "Complex five-target layout"
+            },
+            {
+                "path": "images/test3.png",
+                "expected_targets": 7,
+                "colors": ["yellow", "cyan", "orange", "white", "orange", "pink"],
+                "description": "Scattered six-target pattern"
+            },
+            {
+                "path": "images/test4.png",
+                "expected_targets": 7,
+                "colors": ["white"],
+                "description": "Complex 7-target layout"
+            }
         ]
+        self.test_image_paths = [case["path"] for case in self.test_cases]
 
-    def _is_valid_position(self, x: int, y: int, existing_positions: List[Tuple[int, int]]) -> bool:
-        """Check if a new position is valid (not too close to existing balls)."""
-        # Check image boundaries
-        if (x - self.ball_radius < 0 or
-                x + self.ball_radius >= self.width or
-                y - self.ball_radius < 0 or
-                y + self.ball_radius >= self.height):
-            return False
+    def test_edge_detection(self):
+        """Test edge detection functionality"""
+        sim = TargetSimulation(self.test_image_paths[0])
+        gray_img = cv2.cvtColor(sim.img, cv2.COLOR_BGR2GRAY)
+        edges = sim.edge_detection(gray_img)
 
-        # Check distance from other balls
-        for ex_x, ex_y in existing_positions:
-            distance = np.sqrt((x - ex_x) ** 2 + (y - ex_y) ** 2)
-            if distance < self.min_distance:
-                return False
-        return True
+        # Verify edge detection output
+        self.assertEqual(edges.shape, gray_img.shape)
+        self.assertEqual(edges.dtype, np.uint8)
+        self.assertTrue(np.any(edges > 0))  # Should detect some edges
 
-    def _generate_positions(self) -> List[Tuple[int, int]]:
-        """Generate valid positions for all balls."""
-        positions = []
-        attempts = 0
-        max_attempts = 1000
+    def test_target_detection(self):
+        """Test target detection accuracy"""
+        for path in self.test_image_paths:
+            sim = TargetSimulation(path)
+            sim.locate_targets()
 
-        while len(positions) < self.num_balls and attempts < max_attempts:
-            # Generate random position
-            x = random.randint(self.ball_radius, self.width - self.ball_radius)
-            y = random.randint(self.ball_radius, self.height - self.ball_radius)
+            # Verify targets were detected
+            self.assertTrue(len(sim.targets) > 0)
 
-            if self._is_valid_position(x, y, positions):
-                positions.append((x, y))
-            attempts += 1
+            # Verify target properties
+            for target in sim.targets:
+                self.assertIn('center', target)
+                self.assertIn('radius', target)
+                self.assertIn('hit', target)
+                self.assertFalse(target['hit'])  # Should be False initially
 
-        if len(positions) < self.num_balls:
-            raise ValueError(f"Could not place all {self.num_balls} balls after {max_attempts} attempts")
+    def test_path_generation(self):
+        """Test trajectory generation"""
+        sim = TargetSimulation(self.test_image_paths[0])
+        start = (0, 0)
+        end = (100, 100)
 
-        return positions
+        path = sim.generate_path(start, end)
 
-    def generate_image(self, output_path: str = "test_image.png") -> None:
-        """Generate and save the test image."""
-        # Create blank image
-        image = np.ones((self.height, self.width, 3), dtype=np.uint8) * 255
+        # Verify path properties
+        self.assertEqual(len(path), 40)  # Should have 40 points
+        self.assertEqual(path[0], start)  # Should start at start point
+        self.assertTrue(abs(path[-1][0] - end[0]) <= 1)  # Should end near end point
+        self.assertTrue(abs(path[-1][1] - end[1]) <= 1)
 
-        # Generate positions for balls
-        positions = self._generate_positions()
+    def test_video_creation(self):
+        """Test video output generation"""
+        sim = TargetSimulation(self.test_image_paths[0])
+        output_file = 'test_simulation.avi'
+        sim.create_video(output_file)
 
-        # Draw balls
-        for i, (x, y) in enumerate(positions):
-            color = self.colors[i % len(self.colors)]
-            # Draw filled circle
-            cv2.circle(image, (x, y), self.ball_radius, color, -1)
-            # Draw border
-            cv2.circle(image, (x, y), self.ball_radius, (0, 0, 0), 2)
+        # Verify video file was created
+        import os
+        self.assertTrue(os.path.exists(output_file))
 
-        # Ensure output directory exists
-        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
-
-        # Save image
-        cv2.imwrite(output_path, image)
-        print(f"Test image generated and saved to: {output_path}")
+        # Clean up
+        os.remove(output_file)
 
 
-def main():
-    # Create multiple test cases with different configurations
-    configs = [
-        {"image_size": (800, 600), "num_balls": 3, "ball_radius": 20, "min_distance": 100},
-        {"image_size": (1000, 800), "num_balls": 5, "ball_radius": 25, "min_distance": 120},
-        {"image_size": (1200, 900), "num_balls": 7, "ball_radius": 30, "min_distance": 150}
-    ]
-
-    # Generate test images
-    for i, config in enumerate(configs, 1):
-        try:
-            generator = TestImageGenerator(**config)
-            generator.generate_image(f"images/test{i}.png")
-        except Exception as e:
-            print(f"Error generating test case {i}: {e}")
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    unittest.main()
